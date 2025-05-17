@@ -268,7 +268,7 @@ int stream_enable_ssl(PTSTREAM *pts, const char *proxy_arg) {
 	const char *ca_file = DEFAULT_CA_FILE; /* Default cert file from Makefile */
 #endif /* !DEFAULT_CA_FILE */
 #ifndef DEFAULT_CA_DIR
-	const char *ca_dir = "/etc/ssl/certs/"; /* Default cert directory if none given */
+	const char *ca_dir = NULL; 
 #else
 	const char *ca_dir = DEFAULT_CA_DIR;  /* Default cert directory from Makefile */
 #endif /* !DEFAULT_CA_DIR */
@@ -304,9 +304,14 @@ int stream_enable_ssl(PTSTREAM *pts, const char *proxy_arg) {
 				ca_file = args_info.cacert_arg;
 			}
 		}
-		if (!SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir)) {
-			message("Error loading certificate(s) from %s\n", args_info.cacert_arg);
-			goto fail;
+		if (!ca_file && !ca_dir) {
+			/* Default cert directory if nothing was given */
+			SSL_CTX_set_default_verify_paths(ctx);
+		} else {
+			if (!SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir)) {
+				message("Error loading certificate(s) from %s\n", args_info.cacert_arg);
+				goto fail;
+			}
 		}
 	}
 
