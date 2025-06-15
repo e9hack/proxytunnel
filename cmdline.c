@@ -61,11 +61,6 @@ void cmdline_parser_print_help (void) {
 " -X, --encrypt-remproxy     SSL encrypt data between local and remote proxy\n"
 "\n"
 "Additional options for specific features:\n"
-" -W, --wa-bug-29744         Workaround ASF Bugzilla 29744: if SSL is active\n"
-"                            stop using it after CONNECT (might not work on all\n"
-"                            setups)\n"
-" -B, --buggy-encrypt-proxy  Equivalent to -E -W, provided for backwards\n"
-"                            compatibility\n"
 /*" -L, --tlsenforce           Enforce TLSv1 connection (legacy)\n"
 " -T, --no-ssl3              Do not connect using SSLv3 (legacy)\n"*/
 " -z, --no-check-certificate Don't verify server SSL certificate\n"
@@ -183,7 +178,6 @@ int cmdline_parser( int argc, char * const *argv, struct gengetopt_args_info *ar
 	args_info->encryptremproxy_flag = 0; \
 	args_info->clientcert_arg = NULL; \
 	args_info->clientkey_arg = NULL; \
-	args_info->wa_bug_29744_flag = 0; \
 	/* args_info->no_ssl3_flag = 0; */\
 	args_info->proctitle_arg = NULL; \
 	/* args_info->enforcetls1_flag = 0; */\
@@ -233,8 +227,6 @@ int cmdline_parser( int argc, char * const *argv, struct gengetopt_args_info *ar
 			{ "encrypt-remproxy",0,NULL, 'X' },
 			{ "cert",			1, NULL, 'c' },
 			{ "key",			1, NULL, 'k' },
-			{ "wa-bug-29744",	0, NULL, 'W' },
-			{ "buggy-encrypt-proxy",	0, NULL, 'B' },
 			{ "no-ssl3",		0, NULL, 'T' },
 			{ "no-check-certificate",0,NULL,'z' },
 			{ "cacert",         1, NULL, 'C' },
@@ -243,9 +235,9 @@ int cmdline_parser( int argc, char * const *argv, struct gengetopt_args_info *ar
 			{ NULL,				0, NULL, 0 }
 		};
 
-		c = getopt_long (argc, argv, "hVia:u:s:t:F:p:P:r:R:d:H:x:c:k:vNeEXWBqLo:TzC:46", long_options, &option_index);
+		c = getopt_long (argc, argv, "hVia:u:s:t:F:p:P:r:R:d:H:x:c:k:vNeEXqLo:TzC:46", long_options, &option_index);
 #else
-		c = getopt( argc, argv, "hVia:u:s:t:F:p:P:r:R:d:H:x:c:k:vNeEXWBqLo:TzC:46" );
+		c = getopt( argc, argv, "hVia:u:s:t:F:p:P:r:R:d:H:x:c:k:vNeEXqLo:TzC:46" );
 #endif
 
 		if (c == -1)
@@ -287,19 +279,6 @@ int cmdline_parser( int argc, char * const *argv, struct gengetopt_args_info *ar
 				}
 				args_info->clientkey_given = 1;
 				args_info->clientkey_arg = gengetopt_strdup (optarg);
-				break;
-
-			case 'W':	/* if SSL is active stop it after CONNECT */
-				args_info->wa_bug_29744_flag = !(args_info->wa_bug_29744_flag);
-				if( args_info->verbose_flag )
-					message("If SSL is active stop it after CONNECT\n");
-				break;
-
-			case 'B':	/* do -E -W */
-				args_info->wa_bug_29744_flag = !(args_info->wa_bug_29744_flag);
-				args_info->encryptproxy_flag = !(args_info->encryptproxy_flag);
-				if( args_info->verbose_flag )
-					message("SSL client to proxy enabled, only until CONNECT\n");
 				break;
 
 			case 'i':	/* Run from inetd. */
