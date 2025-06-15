@@ -450,15 +450,6 @@ int main( int argc, char *argv[] ) {
 		}
 	}
 
-	/* Only one of -E/-e/-R can be specified. */
-	if ((args_info.encrypt_flag ? 1 : 0) +
-		(args_info.encryptproxy_flag ? 1 : 0) +
-		(args_info.encryptremproxy_flag ? 1 : 0) > 1)
-	{
-		message("Error: only one of --encrypt-proxy, --encrypt-remproxy and --encrypt can be specified for a tunnel\n");
-		exit( 1 );
-	}
-
 	/* Do we need to run as a standalone daemon? */
 	if ( args_info.standalone_arg > 0 ) {
 		/* Do processing in the other mainline... */
