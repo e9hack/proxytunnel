@@ -40,22 +40,30 @@ PTSTREAM *stream_open(int incoming_fd, int outgoing_fd) {
 	pts = malloc(sizeof(PTSTREAM));
 	pts->incoming_fd = incoming_fd;
 	pts->outgoing_fd = outgoing_fd;
-	pts->ssl = NULL;
+	pts->bio = NULL;
 	pts->ctx = NULL;
 
 	/* Return a pointer to the structure */
 	return pts;
 }
 
-
 /* Close a stream */
 int stream_close(PTSTREAM *pts) {
-	/* Destroy the SSL context */
-	if (pts->ssl) {
-		SSL_shutdown (pts->ssl);
-		SSL_free (pts->ssl);
-		SSL_CTX_free (pts->ctx);
+
+	while (pts->bio) {
+		BIO *bio = BIO_pop(pts->bio);
+		SSL *ssl = NULL;
+		BIO_get_ssl(pts->bio, &ssl);
+		if (ssl) {
+			SSL_shutdown (ssl);
+			SSL_free (ssl);
+		}
+		BIO_free(pts->bio);
+		pts->bio = bio;
 	}
+
+	if (pts->ctx)
+		SSL_CTX_free(pts->ctx);
 
 	/* Close the incoming fd */
 	close(pts->incoming_fd);
@@ -75,12 +83,12 @@ int stream_read(PTSTREAM *pts, void *buf, size_t len) {
 	/* Read up to the specified number of bytes into the buffer */
 	int bytes_read;	
 
-	if (!pts->ssl) {
+	if (!pts->bio) {
 		/* For a non-SSL stream... */
 		bytes_read = read(pts->incoming_fd, buf, len);
 	} else {
 		/* For an SSL stream... */
-		bytes_read = SSL_read(pts->ssl, buf, len);
+		bytes_read = BIO_read(pts->bio, buf, len);
 	}
 
 	return bytes_read;
@@ -94,14 +102,14 @@ int stream_write(PTSTREAM *pts, void *buf, size_t len) {
 	int total_bytes_written = 0;
 
 	while (total_bytes_written < len) {
-		if (!pts->ssl) {
+		if (!pts->bio) {
 			/* For a non-SSL stream... */
 			bytes_written = write(pts->outgoing_fd,
 					      buf + total_bytes_written,
 					      len - total_bytes_written);
 		} else {
 			/* For an SSL stream... */
-			bytes_written = SSL_write(pts->ssl,
+			bytes_written = BIO_write(pts->bio,
 						  buf + total_bytes_written,
 						  len - total_bytes_written);
 		}
@@ -238,83 +246,101 @@ int check_cert_names(X509 *cert, char *peer_host) {
 
 /* Initiate an SSL handshake on this stream and encrypt all subsequent data */
 int stream_enable_ssl(PTSTREAM *pts, const char *proxy_arg) {
-	const SSL_METHOD *meth;
+	BIO *bio;
 	SSL *ssl;
-	SSL_CTX *ctx;
-	long res = 1;
-	long ssl_options = 0;
-
 	X509* cert = NULL;
-	int status;
-	struct stat st_buf;
-#ifndef DEFAULT_CA_FILE
-	const char *ca_file = NULL;
-#else
-	const char *ca_file = DEFAULT_CA_FILE; /* Default cert file from Makefile */
-#endif /* !DEFAULT_CA_FILE */
-#ifndef DEFAULT_CA_DIR
-	const char *ca_dir = "/etc/ssl/certs/"; /* Default cert directory if none given */
-#else
-	const char *ca_dir = DEFAULT_CA_DIR;  /* Default cert directory from Makefile */
-#endif /* !DEFAULT_CA_DIR */
+	long res = 1;
+
 	long vresult;
 	const char *peer_arg = NULL;
 	size_t peer_arg_len;
 	char peer_arg_fmt[32];
 	char *peer_host = NULL;
 
-	/* Initialise the connection */
-	SSLeay_add_ssl_algorithms();
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
-	meth = TLS_client_method();
+	if (!pts->ctx) {
+		SSL_CTX *ctx;
+		const SSL_METHOD *meth;
+		long ssl_options = 0;
+		int status;
+		struct stat st_buf;
+#ifndef DEFAULT_CA_FILE
+		const char *ca_file = NULL;
 #else
-	meth = SSLv23_client_method();
+		const char *ca_file = DEFAULT_CA_FILE; /* Default cert file from Makefile */
+#endif /* !DEFAULT_CA_FILE */
+#ifndef DEFAULT_CA_DIR
+		const char *ca_dir = "/etc/ssl/certs/"; /* Default cert directory if none given */
+#else
+		const char *ca_dir = DEFAULT_CA_DIR;  /* Default cert directory from Makefile */
+#endif /* !DEFAULT_CA_DIR */
+
+		/* Initialise the connection */
+		SSLeay_add_ssl_algorithms();
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+		meth = TLS_client_method();
+#else
+		meth = SSLv23_client_method();
 #endif
-	SSL_load_error_strings();
+		SSL_load_error_strings();
 
-	ctx = SSL_CTX_new (meth);
-	ssl_options |= SSL_OP_NO_SSLv3;
-	SSL_CTX_set_options (ctx, ssl_options);
+		ctx = SSL_CTX_new (meth);
+		ssl_options |= SSL_OP_NO_SSLv3;
+		SSL_CTX_set_options (ctx, ssl_options);
 
-	if ( !args_info.no_check_cert_flag ) {
-		if ( args_info.cacert_given ) {
-			if ((status = stat(args_info.cacert_arg, &st_buf)) != 0) {
-				message("Error reading certificate path %s\n", args_info.cacert_arg);
+
+		if ( !args_info.no_check_cert_flag ) {
+			if ( args_info.cacert_given ) {
+				if ((status = stat(args_info.cacert_arg, &st_buf)) != 0) {
+					message("Error reading certificate path %s\n", args_info.cacert_arg);
+					goto fail;
+				}
+				if (S_ISDIR(st_buf.st_mode)) {
+					ca_dir = args_info.cacert_arg;
+				} else {
+					ca_dir = NULL;
+					ca_file = args_info.cacert_arg;
+				}
+			}
+			if (!SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir)) {
+				message("Error loading certificate(s) from %s\n", args_info.cacert_arg);
 				goto fail;
 			}
-			if (S_ISDIR(st_buf.st_mode)) {
-				ca_dir = args_info.cacert_arg;
-			} else {
-				ca_dir = NULL;
-				ca_file = args_info.cacert_arg;
+		}
+
+		/* If given, load client certificate (chain) and key */
+		if ( args_info.clientcert_given && args_info.clientkey_given ) {
+			if ( 1 != SSL_CTX_use_certificate_chain_file(ctx, args_info.clientcert_arg) ) {
+				message("Error loading client certificate (chain) from %s\n", args_info.clientcert_arg);
+				goto fail;
+			}
+			if ( 1 != SSL_CTX_use_PrivateKey_file(ctx, args_info.clientkey_arg, SSL_FILETYPE_PEM) ) {
+				message("Error loading client key from %s, or key does not match certificate\n", args_info.clientkey_arg);
+				goto fail;
 			}
 		}
-		if (!SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir)) {
-			message("Error loading certificate(s) from %s\n", args_info.cacert_arg);
+		pts->ctx = ctx;
+	}
+	if (!pts->bio) {
+		pts->bio = BIO_new_socket(pts->incoming_fd, BIO_NOCLOSE);
+		if (!pts->bio) {
+			message("BIO_new_socket failed\n");
 			goto fail;
 		}
 	}
 
-	/* If given, load client certificate (chain) and key */
-	if ( args_info.clientcert_given && args_info.clientkey_given ) {
-		if ( 1 != SSL_CTX_use_certificate_chain_file(ctx, args_info.clientcert_arg) ) {
-			message("Error loading client certificate (chain) from %s\n", args_info.clientcert_arg);
-			goto fail;
-		}
-		if ( 1 != SSL_CTX_use_PrivateKey_file(ctx, args_info.clientkey_arg, SSL_FILETYPE_PEM) ) {
-			message("Error loading client key from %s, or key does not match certificate\n", args_info.clientkey_arg);
-			goto fail;
-		}
+	ssl = SSL_new(pts->ctx);
+	if (ssl == NULL) {
+		message("SSL_new failed\n");
+		goto fail;
 	}
 
-	ssl = SSL_new (ctx);
-    if ( ssl == NULL ) {
-        message("SSL_new failed\n");
-        goto fail;
-    }
-	
-	SSL_set_rfd (ssl, stream_get_incoming_fd(pts));
-	SSL_set_wfd (ssl, stream_get_outgoing_fd(pts));	
+	bio = BIO_new(BIO_f_ssl());
+	if (bio == NULL) {
+		message("BIO_new failed\n");
+		goto fail;
+	}
+	BIO_set_ssl(bio, ssl, BIO_NOCLOSE);
+	pts->bio = BIO_push(bio, pts->bio);
 
 	/* Determine the host name we are connecting to */
 	peer_arg = args_info.host_given ? args_info.host_arg : proxy_arg;
@@ -365,10 +391,6 @@ int stream_enable_ssl(PTSTREAM *pts, const char *proxy_arg) {
 		X509_free(cert);
 	}
 
-	/* Store ssl and ctx parameters */
-	pts->ssl = ssl;
-	pts->ctx = ctx;
-
 	return 1;
 
 fail:
@@ -382,18 +404,12 @@ fail:
 /* Return the incoming_fd for a given stream */
 int stream_get_incoming_fd(PTSTREAM *pts) {
 
-	if (!pts->ssl)
-		return pts->incoming_fd;
-	else
-		return SSL_get_rfd(pts->ssl);
+	return pts->incoming_fd;
 }
 
 /* Return the outgoing_fd for a given stream */
 int stream_get_outgoing_fd(PTSTREAM *pts) {
-	if (!pts->ssl)
-		return pts->outgoing_fd;
-	else
-		return SSL_get_wfd(pts->ssl);
+	return pts->outgoing_fd;
 }
 
 // vim:noexpandtab:ts=4

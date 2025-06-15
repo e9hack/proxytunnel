@@ -29,7 +29,7 @@
 typedef struct ptstream {
 	int incoming_fd;
 	int outgoing_fd;
-	SSL *ssl;
+	BIO *bio;
 	SSL_CTX *ctx;
 } PTSTREAM;
 
