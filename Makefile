@@ -11,9 +11,6 @@ CFLAGS ?= -Wall -O2 -ggdb
 # Comment on non-gnu systems
 OPTFLAGS += -DHAVE_GETOPT_LONG
 
-# Comment if you don't have/want ssl
-OPTFLAGS += -DUSE_SSL
-
 # Most systems
 OPTFLAGS += -DSETPROCTITLE -DSPT_TYPE=2
 
