@@ -340,7 +340,8 @@ int stream_enable_ssl(PTSTREAM *pts, const char *proxy_arg) {
 		goto fail;
 	}
 	BIO_set_ssl(bio, ssl, BIO_NOCLOSE);
-	pts->bio = BIO_push(bio, pts->bio);
+	BIO_push(bio, pts->bio);
+	pts->bio = bio;
 
 	/* Determine the host name we are connecting to */
 	peer_arg = args_info.host_given ? args_info.host_arg : proxy_arg;
