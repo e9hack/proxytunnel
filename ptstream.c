@@ -120,7 +120,7 @@ int stream_write(PTSTREAM *pts, void *buf, size_t len) {
 		total_bytes_written += bytes_written;
 	}
 
-	return total_bytes_written;
+	return bytes_written < 0 ? bytes_written : total_bytes_written;
 }
 
 
